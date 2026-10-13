@@ -1,6 +1,12 @@
 name: Build and test Mac app
 on:
   workflow_dispatch:
+    inputs:
+      upload_artifact:
+        description: Upload the packaged app and verification files
+        required: true
+        default: false
+        type: boolean
   push:
     branches: [main]
   pull_request:
@@ -41,7 +47,7 @@ jobs:
       - name: Compile universal native app and run tests
         run: bash build.sh
       - name: Save app and verification results
-        if: always() && github.event_name != 'pull_request'
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.upload_artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: LightTodo-mac-universal
