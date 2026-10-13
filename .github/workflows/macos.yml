@@ -1,0 +1,30 @@
+name: Build and test Mac app
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  mac:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Compile universal native app and run tests
+        run: bash build.sh
+      - name: Save app and verification results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: LightTodo-mac-universal
+          path: |
+            out/LightTodo-mac-universal.zip
+            out/SHA256.txt
+            out/swiftc.log
+            out/verification/preview.png
+            out/verification/result.txt
+          retention-days: 30
