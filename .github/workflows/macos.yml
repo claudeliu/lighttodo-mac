@@ -1,8 +1,20 @@
 name: Build and test Mac app
 on:
   workflow_dispatch:
+    inputs:
+      upload_artifact:
+        description: Upload the packaged app and verification files
+        required: true
+        default: false
+        type: boolean
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
+    paths:
+      - LightTodo.swift
+      - build.sh
+      - .github/workflows/macos.yml
 permissions:
   contents: read
 concurrency:
@@ -14,10 +26,28 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Check repository privacy and tracked files
+        shell: bash
+        run: |
+          set -euo pipefail
+          tracked_builds="$(git ls-files | grep -E '(^|/)[^/]+\.(app|dmg|pkg|zip|exe|dll|pdb)(/|$)' || true)"
+          if [[ -n "$tracked_builds" ]]; then
+            printf 'Generated build files must not be committed:\n%s\n' "$tracked_builds" >&2
+            exit 1
+          fi
+          history="$(git log --all -p --text --no-color)"
+          local_paths="$(printf '%s\n' "$history" | grep -E '([A-Za-z]:\\(Users|Documents and Settings)\\|/(Users|home)/[^/[:space:]]+)' || true)"
+          personal_emails="$(printf '%s\n' "$history" | grep -E -i '[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}' | grep -E -i -v '(@users\.noreply\.github\.com|noreply@github\.com)' || true)"
+          if [[ -n "$local_paths" || -n "$personal_emails" ]]; then
+            printf 'Possible private paths or non-noreply email addresses were found in reachable Git history.\n%s\n%s\n' "$local_paths" "$personal_emails" >&2
+            exit 1
+          fi
       - name: Compile universal native app and run tests
         run: bash build.sh
       - name: Save app and verification results
-        if: always()
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.upload_artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: LightTodo-mac-universal

@@ -128,6 +128,10 @@ final class Store {
     }
 
     static func read(_ url: URL) throws -> Document {
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        guard ((attributes[.size] as? NSNumber)?.intValue ?? Int.max) <= 128 * 1024 * 1024 else {
+            throw TodoError.invalidData
+        }
         let data = try Data(contentsOf: url)
         let value = try JSONDecoder().decode(Document.self, from: data)
         let items = value.active + value.history
@@ -151,6 +155,27 @@ final class Store {
             try Data(contentsOf: file).write(to: backupFile, options: .atomic)
         }
         try bytes.write(to: file, options: .atomic)
+    }
+
+    func replace(with importedDocument: Document) throws {
+        let previous = document
+        var imported = importedDocument
+        if imported.active.isEmpty { imported.active = [Todo()] }
+        if !imported.appearance.image.isEmpty,
+           !FileManager.default.fileExists(atPath: directory.appendingPathComponent(imported.appearance.image).path) {
+            imported.appearance.image = ""
+        }
+        do {
+            let encoder = JSONEncoder()
+            let previousBytes = try encoder.encode(previous)
+            let importedBytes = try encoder.encode(imported)
+            try previousBytes.write(to: backupFile, options: .atomic)
+            try importedBytes.write(to: file, options: .atomic)
+            document = imported
+        } catch {
+            document = previous
+            throw error
+        }
     }
 
     @discardableResult func add(after id: UUID?) -> UUID {
@@ -1051,6 +1076,45 @@ final class Controller: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTab
         }
     }
 
+    func importData() {
+        commitEditing()
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.message = "选择由 LightTodo 导出的 JSON 数据文件"
+        guard panel.runModal() == .OK, let source = panel.url else { return }
+
+        do {
+            let imported = try Store.read(source)
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "导入将替换当前待办数据"
+            alert.informativeText = "文件包含 \(imported.active.count) 条待办和 \(imported.history.count) 条完成记录。当前数据会先保存为 tasks.backup.json。"
+            alert.addButton(withTitle: "导入并替换")
+            alert.addButton(withTitle: "取消")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+            try store.replace(with: imported)
+            saveWork?.cancel()
+            saveWork = nil
+            for task in completing.values { task.cancel() }
+            completing.removeAll()
+            reminderTimer?.invalidate()
+            reminderTimer = nil
+            history = false
+            tabs.selectedSegment = 0
+            bottomButton.title = "＋ 新增待办"
+            bottomButton.setAccessibilityLabel("新增待办")
+            applyAppearance(loadImage: true)
+            table.reloadData()
+            armReminder()
+            DispatchQueue.main.async { [weak self] in self?.focusRow(0) }
+        } catch {
+            showError(error)
+        }
+    }
+
     func handleBottomButton() {
         if history {
             promptClearHistory()
@@ -1306,6 +1370,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func togglePinShortcut(_ sender: Any?) { controller?.togglePin() }
     @objc func clearHistory(_ sender: Any?) { controller?.promptClearHistory() }
+    @objc func importData(_ sender: Any?) { controller?.importData() }
     @objc func exportData(_ sender: Any?) { controller?.exportData() }
 }
 
@@ -1368,6 +1433,25 @@ func selfTest(_ directory: URL) throws {
     let scaleReload = try Store.read(scaleFile)
     try check(scaleReload.active.count == 150 && scaleReload.history.count == 1000, "150 active and 1000 history entries")
     try FileManager.default.removeItem(at: scaleFile)
+
+    // 导入替换：先备份原数据，接受有效文件，并清除目标电脑上不存在的背景图片引用
+    let importDirectory = directory.appendingPathComponent("import-replace", isDirectory: true)
+    let importStore = try Store(directory: importDirectory)
+    importStore.document.active[0].text = "导入前数据"
+    try importStore.save()
+    let importFile = directory.appendingPathComponent("import.json")
+    let importedDocument = Document(
+        active: [Todo(text: "导入后的待办", reminderAt: Date().addingTimeInterval(300), link: "https://example.com/import")],
+        history: [Todo(text: "导入的完成记录", completedAt: Date())],
+        appearance: Appearance(color: "E8F2FF", opacity: 0.9, pinned: true, image: "background-missing.png")
+    )
+    try JSONEncoder().encode(importedDocument).write(to: importFile)
+    try importStore.replace(with: Store.read(importFile))
+    try check(importStore.document.active.first?.text == "导入后的待办" && importStore.document.history.count == 1, "import replaces active and history data")
+    try check(importStore.document.appearance.image.isEmpty, "import clears unavailable background image reference")
+    let importBackup = try Store.read(importStore.backupFile)
+    try check(importBackup.active.first?.text == "导入前数据", "import preserves previous data as backup")
+    try FileManager.default.removeItem(at: importFile)
 
     let controller = Controller(store: store)
     controller.window.makeKeyAndOrderFront(nil)
@@ -1491,7 +1575,7 @@ func selfTest(_ directory: URL) throws {
     let files = try FileManager.default.contentsOfDirectory(atPath: directory.path)
     try check(files.contains(where: { $0.hasPrefix("tasks.damaged-") }), "damaged original preserved")
 
-    try Data("PASS: native launch, add, delayed check-off, undo complete, history, restore, clear history, delete item, reminder, link, copy, pin, opacity, fold, image, persistence, scale, validation, backup recovery\n".utf8).write(to: directory.appendingPathComponent("result.txt"))
+    try Data("PASS: native launch, add, delayed check-off, undo complete, history, restore, clear history, delete item, reminder, link, copy, import, pin, opacity, fold, image, persistence, scale, validation, backup recovery\n".utf8).write(to: directory.appendingPathComponent("result.txt"))
     print("PASS: native app smoke and data tests")
 }
 
@@ -1560,6 +1644,7 @@ let pinShortcut = todoMenu.addItem(withTitle: "切换置顶", action: #selector(
 pinShortcut.keyEquivalentModifierMask = [.command, .shift]
 todoMenu.addItem(.separator())
 todoMenu.addItem(withTitle: "清空完成记录…", action: #selector(AppDelegate.clearHistory(_:)), keyEquivalent: "")
+todoMenu.addItem(withTitle: "导入待办数据…", action: #selector(AppDelegate.importData(_:)), keyEquivalent: "")
 todoMenu.addItem(withTitle: "导出待办数据…", action: #selector(AppDelegate.exportData(_:)), keyEquivalent: "")
 todoItem.submenu = todoMenu
 mainMenu.addItem(todoItem)

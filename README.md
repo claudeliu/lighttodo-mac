@@ -14,7 +14,7 @@ A lightweight, offline macOS checklist built with native AppKit. It has no accou
 - Window pinning, opacity, colors, and a local background image
 - Undo/redo, standard macOS menus, and keyboard shortcuts
 - Row context menus for completing, restoring, deleting, and copying text
-- Confirmed history deletion and local JSON data export
+- Confirmed history deletion plus local JSON data import and export
 - Atomic JSON persistence, previous-save backup, and damaged-file preservation
 - Universal build for Apple Silicon and Intel, targeting macOS 12+
 
@@ -43,7 +43,7 @@ If macOS reports that the app is damaged or contains malware, stop and report th
 - Click the link icon to add, open, change, or remove an HTTP/HTTPS link or a local file. Local-file links work only while that file remains at the same path on that Mac.
 - Completing an item cancels its reminder. Restoring an item does not restore an old reminder.
 - Right-click a row to copy its text or manage it. Deleting is separate from completing and requires confirmation for non-empty items and history.
-- Use **Todo → Export Todo Data…** to save a local JSON copy.
+- Use **Todo → Export Todo Data… / 待办 → 导出待办数据…** to save a local JSON copy. Use **Import Todo Data… / 导入待办数据…** to restore one; LightTodo shows item counts before replacing current data and keeps the previous data as `tasks.backup.json`.
 - The app does not sync between devices.
 
 ## Privacy and data / 隐私与数据
@@ -72,7 +72,7 @@ The universal app and ZIP are written to `out/`. The build script runs the nativ
 
 ## Verification scope / 验证范围
 
-The automated test covers launch, editing, Enter/Shift+Enter behavior, delayed completion, history and restore, reminders, links, appearance, image handling, persistence, and backup recovery. Passing CI does not guarantee compatibility with every macOS version, input method, display, or full-screen game.
+The automated test covers launch, editing, Enter/Shift+Enter behavior, delayed completion, history and restore, reminders, links, data import, appearance, image handling, persistence, and backup recovery. Passing CI does not guarantee compatibility with every macOS version, input method, display, or full-screen game.
 
 ## License
 
