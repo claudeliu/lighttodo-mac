@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Added confirmed JSON data import with validation, automatic pre-import backup, and safe handling of background images that are unavailable on the destination Mac.
+
 ## 0.3.1
 
 - Added per-item local reminders with one-shot scheduling and overdue delivery after reopening.
