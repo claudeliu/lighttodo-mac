@@ -2,3 +2,10 @@
 out/
 *.xcuserstate
 xcuserdata/
+*.app
+*.dmg
+*.pkg
+*.zip
+*.exe
+*.dll
+*.pdb
