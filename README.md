@@ -7,6 +7,7 @@ A lightweight, offline macOS checklist built with native AppKit. It has no accou
 ## Features / 功能
 
 - Editable checklist with completion history and one-click restore
+- Instant multi-term search across active items and completion history
 - Enter splits or creates the next item; Shift+Enter inserts a line break
 - Empty-item deletion with Backspace/Delete
 - Per-item local reminders; overdue reminders are shown when the app is reopened
@@ -23,6 +24,7 @@ A lightweight, offline macOS checklist built with native AppKit. It has no accou
 | Shortcut | Action |
 | --- | --- |
 | `⌘N` | Add a todo / 新增待办 |
+| `⌘F` | Search the current list / 搜索当前列表 |
 | `⌘1` / `⌘2` | Show active/history / 切换待办与完成记录 |
 | `⌘⇧P` | Toggle always-on-top / 切换置顶 |
 | `Enter` | Split at the caret / 从光标处拆分 |
@@ -43,6 +45,7 @@ If macOS reports that the app is damaged or contains malware, stop and report th
 - Click the link icon to add, open, change, or remove an HTTP/HTTPS link or a local file. Local-file links work only while that file remains at the same path on that Mac.
 - Completing an item cancels its reminder. Restoring an item does not restore an old reminder.
 - Right-click a row to copy its text or manage it. Deleting is separate from completing and requires confirmation for non-empty items and history.
+- Type one or more words in the search field to filter the current tab instantly. Search is case- and diacritic-insensitive and never changes saved items.
 - Use **Todo → Export Todo Data… / 待办 → 导出待办数据…** to save a local JSON copy. Use **Import Todo Data… / 导入待办数据…** to restore one; LightTodo shows item counts before replacing current data and keeps the previous data as `tasks.backup.json`.
 - The app does not sync between devices.
 
@@ -72,7 +75,7 @@ The universal app and ZIP are written to `out/`. The build script runs the nativ
 
 ## Verification scope / 验证范围
 
-The automated test covers launch, editing, Enter/Shift+Enter behavior, delayed completion, history and restore, reminders, links, data import, appearance, image handling, persistence, and backup recovery. Passing CI does not guarantee compatibility with every macOS version, input method, display, or full-screen game.
+The automated test covers launch, editing, Enter/Shift+Enter behavior, search matching, delayed completion, history and restore, reminders, links, data import, appearance, image handling, persistence, and backup recovery. Passing CI does not guarantee compatibility with every macOS version, input method, display, or full-screen game.
 
 ## License
 

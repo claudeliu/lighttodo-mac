@@ -32,6 +32,14 @@ struct Todo: Codable, Equatable {
     }
 }
 
+func matchesSearch(_ text: String, query: String) -> Bool {
+    let terms = query.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+    guard !terms.isEmpty else { return true }
+    return terms.allSatisfy { term in
+        text.range(of: term, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+    }
+}
+
 struct Appearance: Codable, Equatable {
     var color: String
     var opacity: Double
@@ -352,7 +360,7 @@ final class TodoTableView: NSTableView {
 
 // MARK: - Controller
 
-final class Controller: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate {
+final class Controller: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate, NSSearchFieldDelegate {
     let store: Store
     let window: NSWindow
     let surface = Surface()
@@ -360,8 +368,11 @@ final class Controller: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTab
     let scroll = NSScrollView()
     let header = NSView()
     let tabs = NSSegmentedControl(labels: ["待办", "完成记录"], trackingMode: .selectOne, target: nil, action: nil)
+    let search = NSSearchField()
     var pin: ActionButton!, palette: ActionButton!, opacity: ActionButton!, fold: ActionButton!, bottomButton: ActionButton!
     var history = false
+    var visibleActiveIndexes = [Int]()
+    var visibleHistoryIndexes = [Int]()
     var folded = false
     var expandedHeight: CGFloat = 440
     var saveWork: DispatchWorkItem?
@@ -423,6 +434,11 @@ final class Controller: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTab
         tabs.action = #selector(changeTab)
         tabs.setAccessibilityLabel("切换待办与完成记录")
 
+        search.placeholderString = "搜索当前列表"
+        search.sendsSearchStringImmediately = true
+        search.delegate = self
+        search.setAccessibilityLabel("搜索待办与完成记录")
+
         bottomButton = ActionButton(title: "＋ 新增待办", tip: "添加新待办", accessibility: "新增待办", action: { [weak self] in self?.handleBottomButton() })
 
         scroll.drawsBackground = false
@@ -446,11 +462,14 @@ final class Controller: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTab
         table.dataSource = self
         scroll.documentView = table
 
-        ([tabs, scroll, bottomButton!] as [NSView]).forEach { $0.translatesAutoresizingMaskIntoConstraints = false; surface.addSubview($0) }
+        ([tabs, search, scroll, bottomButton!] as [NSView]).forEach { $0.translatesAutoresizingMaskIntoConstraints = false; surface.addSubview($0) }
         NSLayoutConstraint.activate([
             tabs.topAnchor.constraint(equalTo: surface.topAnchor, constant: 46),
             tabs.leadingAnchor.constraint(equalTo: surface.leadingAnchor, constant: 10),
-            scroll.topAnchor.constraint(equalTo: tabs.bottomAnchor, constant: 8),
+            search.topAnchor.constraint(equalTo: tabs.bottomAnchor, constant: 8),
+            search.leadingAnchor.constraint(equalTo: surface.leadingAnchor, constant: 10),
+            search.trailingAnchor.constraint(equalTo: surface.trailingAnchor, constant: -10),
+            scroll.topAnchor.constraint(equalTo: search.bottomAnchor, constant: 6),
             scroll.leadingAnchor.constraint(equalTo: surface.leadingAnchor, constant: 4),
             scroll.trailingAnchor.constraint(equalTo: surface.trailingAnchor, constant: -4),
             scroll.bottomAnchor.constraint(equalTo: bottomButton.topAnchor, constant: -6),
@@ -460,6 +479,7 @@ final class Controller: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTab
             bottomButton.heightAnchor.constraint(equalToConstant: 28)
         ])
 
+        refreshVisibleIndexes()
         applyAppearance(loadImage: true)
         DispatchQueue.main.async { [weak self] in
             self?.fireReminders()
@@ -495,13 +515,56 @@ final class Controller: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTab
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int {
-        history ? store.document.history.count : store.document.active.count
+        if search.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return history ? store.document.history.count : store.document.active.count
+        }
+        return history ? visibleHistoryIndexes.count : visibleActiveIndexes.count
+    }
+
+    func refreshVisibleIndexes() {
+        let query = search.stringValue
+        if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            visibleActiveIndexes.removeAll(keepingCapacity: true)
+            visibleHistoryIndexes.removeAll(keepingCapacity: true)
+            return
+        }
+        visibleActiveIndexes = store.document.active.indices.filter { matchesSearch(store.document.active[$0].text, query: query) }
+        visibleHistoryIndexes = store.document.history.indices.reversed().filter { matchesSearch(store.document.history[$0].text, query: query) }
+    }
+
+    func activeIndex(forDisplayRow row: Int) -> Int? {
+        guard row >= 0 else { return nil }
+        if search.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return row < store.document.active.count ? row : nil
+        }
+        return row < visibleActiveIndexes.count ? visibleActiveIndexes[row] : nil
+    }
+
+    func historyIndex(forDisplayRow row: Int) -> Int? {
+        guard row >= 0 else { return nil }
+        if search.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let index = store.document.history.count - 1 - row
+            return index >= 0 && index < store.document.history.count ? index : nil
+        }
+        return row < visibleHistoryIndexes.count ? visibleHistoryIndexes[row] : nil
+    }
+
+    func displayRow(forActiveIndex index: Int) -> Int? {
+        if search.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return index >= 0 && index < store.document.active.count ? index : nil
+        }
+        return visibleActiveIndexes.firstIndex(of: index)
+    }
+
+    func reloadVisibleData() {
+        refreshVisibleIndexes()
+        table.reloadData()
     }
 
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
         if history { return 52 }
-        guard row < store.document.active.count else { return 40 }
-        let text = store.document.active[row].text + " "
+        guard let index = activeIndex(forDisplayRow: row) else { return 40 }
+        let text = store.document.active[index].text + " "
         let occupiedWidth: CGFloat = 104
         let size = (text as NSString).boundingRect(
             with: NSSize(width: max(100, tableView.bounds.width - occupiedWidth), height: 100000),
@@ -527,8 +590,8 @@ final class Controller: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTab
         cell.usesPicture = surface.picture != nil
 
         if history {
-            guard index < store.document.history.count else { return cell }
-            let item = store.document.history[store.document.history.count - 1 - index]
+            guard let historyIndex = historyIndex(forDisplayRow: index) else { return cell }
+            let item = store.document.history[historyIndex]
             let stamp = item.completedAt.map { dateFormatter.string(from: $0) } ?? ""
             let text = NSTextField(labelWithString: item.text + (stamp.isEmpty ? "" : "\n" + stamp))
             text.maximumNumberOfLines = 2
@@ -545,7 +608,7 @@ final class Controller: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTab
                 self.tabs.selectedSegment = 0
                 self.bottomButton.title = "＋ 新增待办"
                 self.bottomButton.setAccessibilityLabel("新增待办")
-                self.table.reloadData()
+                self.reloadVisibleData()
                 if let restoredIndex = self.store.document.active.firstIndex(where: { $0.id == item.id }) {
                     self.focusRow(restoredIndex)
                 }
@@ -553,8 +616,8 @@ final class Controller: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTab
             restore.contentTintColor = ink.withAlphaComponent(0.7)
             layoutHistory(text, restore: restore, in: cell)
         } else {
-            guard index < store.document.active.count else { return cell }
-            let item = store.document.active[index]
+            guard let activeIndex = activeIndex(forDisplayRow: index) else { return cell }
+            let item = store.document.active[activeIndex]
             let isCompleting = completing[item.id] != nil
 
             let check = ActionButton(title: "", tip: isCompleting ? "点击取消完成" : "完成待办", accessibility: "完成待办", action: { [weak self] in
@@ -663,14 +726,14 @@ final class Controller: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTab
         let menu = NSMenu()
 
         if history {
-            guard row >= 0, row < store.document.history.count else {
+            guard let historyIndex = historyIndex(forDisplayRow: row) else {
                 if !store.document.history.isEmpty {
                     menu.addItem(ClosureMenuItem("清空所有完成记录…", action: { [weak self] in self?.promptClearHistory() }))
                     return menu
                 }
                 return nil
             }
-            let item = store.document.history[store.document.history.count - 1 - row]
+            let item = store.document.history[historyIndex]
             menu.addItem(ClosureMenuItem("恢复为待办", action: { [weak self] in
                 guard let self = self else { return }
                 self.store.restore(item.id)
@@ -679,7 +742,7 @@ final class Controller: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTab
                 self.tabs.selectedSegment = 0
                 self.bottomButton.title = "＋ 新增待办"
                 self.bottomButton.setAccessibilityLabel("新增待办")
-                self.table.reloadData()
+                self.reloadVisibleData()
                 if let restoredIndex = self.store.document.active.firstIndex(where: { $0.id == item.id }) {
                     self.focusRow(restoredIndex)
                 }
@@ -694,8 +757,8 @@ final class Controller: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTab
             menu.addItem(ClosureMenuItem("清空所有完成记录…", action: { [weak self] in self?.promptClearHistory() }))
             return menu
         } else {
-            guard row >= 0, row < store.document.active.count else { return nil }
-            let item = store.document.active[row]
+            guard let activeIndex = activeIndex(forDisplayRow: row) else { return nil }
+            let item = store.document.active[activeIndex]
             menu.addItem(ClosureMenuItem("删除此待办", key: "\u{08}", action: { [weak self] in
                 self?.promptDeleteItem(item.id)
             }))
@@ -742,7 +805,7 @@ final class Controller: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTab
         if alert.runModal() == .alertFirstButtonReturn {
             store.clearHistory()
             persist()
-            table.reloadData()
+            reloadVisibleData()
         }
     }
 
@@ -756,7 +819,7 @@ final class Controller: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTab
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         store.deleteHistory(id)
         persist()
-        table.reloadData()
+        reloadVisibleData()
     }
 
     func promptDeleteItem(_ id: UUID) {
@@ -814,8 +877,10 @@ final class Controller: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTab
     }
 
     func reloadActiveRow(for id: UUID) {
-        guard !history, let index = store.document.active.firstIndex(where: { $0.id == id }) else { return }
-        table.reloadData(forRowIndexes: IndexSet(integer: index), columnIndexes: IndexSet(integer: 0))
+        guard !history,
+              let index = store.document.active.firstIndex(where: { $0.id == id }),
+              let row = displayRow(forActiveIndex: index) else { return }
+        table.reloadData(forRowIndexes: IndexSet(integer: row), columnIndexes: IndexSet(integer: 0))
     }
 
     func reloadTablePreservingFocus() {
@@ -825,11 +890,15 @@ final class Controller: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTab
             activeID = field.itemID
             selectedRange = textView.selectedRange()
         }
-        table.reloadData()
+        reloadVisibleData()
         if let targetID = activeID {
             DispatchQueue.main.async { [weak self] in
                 guard let self = self, !self.history, let idx = self.store.document.active.firstIndex(where: { $0.id == targetID }) else { return }
-                if let cell = self.table.view(atColumn: 0, row: idx, makeIfNecessary: true),
+                guard let row = self.displayRow(forActiveIndex: idx) else {
+                    self.window.makeFirstResponder(self.search)
+                    return
+                }
+                if let cell = self.table.view(atColumn: 0, row: row, makeIfNecessary: true),
                    let targetField = cell.subviews.compactMap({ $0 as? ItemField }).first {
                     self.window.makeFirstResponder(targetField)
                     if let range = selectedRange, let editor = targetField.currentEditor() as? NSTextView, range.location <= (editor.string as NSString).length {
@@ -863,7 +932,7 @@ final class Controller: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTab
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         store.document.active[index].link = trimmed.isEmpty ? nil : String(trimmed.prefix(4096))
         persist()
-        table.reloadData()
+        reloadVisibleData()
     }
 
     func linkURL(_ value: String) -> URL? {
@@ -944,7 +1013,7 @@ final class Controller: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTab
             return
         }
         persist()
-        table.reloadData()
+        reloadVisibleData()
         armReminder()
     }
 
@@ -963,7 +1032,7 @@ final class Controller: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTab
         let due = store.takeDueReminders(at: Date())
         guard !due.isEmpty else { armReminder(); return }
         persist()
-        table.reloadData()
+        reloadVisibleData()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         let lines = due.prefix(10).map { item -> String in
@@ -982,10 +1051,18 @@ final class Controller: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTab
     // MARK: - Text Editing & Delegation
 
     func controlTextDidChange(_ obj: Notification) {
+        if let searchField = obj.object as? NSSearchField, searchField === search {
+            reloadVisibleData()
+            return
+        }
         guard let field = obj.object as? ItemField, let index = store.document.active.firstIndex(where: { $0.id == field.itemID }) else { return }
         store.document.active[index].text = String(field.stringValue.prefix(10000))
         scheduleSave()
-        table.noteHeightOfRows(withIndexesChanged: IndexSet(integer: index))
+        if search.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            table.noteHeightOfRows(withIndexesChanged: IndexSet(integer: index))
+        } else {
+            reloadVisibleData()
+        }
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
@@ -1007,6 +1084,7 @@ final class Controller: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTab
 
     func split(_ id: UUID, text: String, range: NSRange) {
         commitEditing()
+        search.stringValue = ""
         guard let index = store.document.active.firstIndex(where: { $0.id == id }) else { return }
         let value = text as NSString
         guard range.location <= value.length, NSMaxRange(range) <= value.length else { return }
@@ -1016,7 +1094,7 @@ final class Controller: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTab
             store.document.active[nextIndex].text = value.substring(from: NSMaxRange(range))
         }
         persist()
-        table.reloadData()
+        reloadVisibleData()
         DispatchQueue.main.async { [weak self] in
             guard let self = self, !self.history, let nextIndex = self.store.document.active.firstIndex(where: { $0.id == nextID }) else { return }
             self.table.scrollRowToVisible(nextIndex)
@@ -1054,11 +1132,24 @@ final class Controller: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTab
 
     func focusRow(_ row: Int) {
         guard !history, row >= 0, row < store.document.active.count else { return }
-        table.scrollRowToVisible(row)
-        if let cell = table.view(atColumn: 0, row: row, makeIfNecessary: true),
+        guard let displayRow = displayRow(forActiveIndex: row) else { return }
+        table.scrollRowToVisible(displayRow)
+        if let cell = table.view(atColumn: 0, row: displayRow, makeIfNecessary: true),
            let field = cell.subviews.compactMap({ $0 as? ItemField }).first {
             window.makeFirstResponder(field)
         }
+    }
+
+    func focusSearch() {
+        if folded { toggleFold() }
+        window.makeFirstResponder(search)
+        search.currentEditor()?.selectAll(nil)
+    }
+
+    func clearSearch() {
+        guard !search.stringValue.isEmpty else { return }
+        search.stringValue = ""
+        reloadVisibleData()
     }
 
     func exportData() {
@@ -1107,7 +1198,7 @@ final class Controller: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTab
             bottomButton.title = "＋ 新增待办"
             bottomButton.setAccessibilityLabel("新增待办")
             applyAppearance(loadImage: true)
-            table.reloadData()
+            reloadVisibleData()
             armReminder()
             DispatchQueue.main.async { [weak self] in self?.focusRow(0) }
         } catch {
@@ -1125,9 +1216,10 @@ final class Controller: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTab
 
     func add(after id: UUID?) {
         commitEditing()
+        clearSearch()
         let newID = store.add(after: id)
         persist()
-        table.reloadData()
+        reloadVisibleData()
         DispatchQueue.main.async { [weak self] in
             guard let self = self, !self.history, let index = self.store.document.active.firstIndex(where: { $0.id == newID }) else { return }
             self.table.scrollRowToVisible(index)
@@ -1167,7 +1259,7 @@ final class Controller: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTab
         history = tabs.selectedSegment == 1
         bottomButton.title = history ? "清空完成记录" : "＋ 新增待办"
         bottomButton.setAccessibilityLabel(history ? "清空完成记录" : "新增待办")
-        table.reloadData()
+        reloadVisibleData()
         if !history { DispatchQueue.main.async { [weak self] in self?.focusRow(0) } }
     }
 
@@ -1352,7 +1444,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller?.tabs.selectedSegment = 0
         controller?.bottomButton.title = "＋ 新增待办"
         controller?.bottomButton.setAccessibilityLabel("新增待办")
-        controller?.table.reloadData()
+        controller?.reloadVisibleData()
         controller?.add(after: nil)
     }
 
@@ -1368,6 +1460,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.changeTab()
     }
 
+    @objc func focusSearch(_ sender: Any?) { controller?.focusSearch() }
     @objc func togglePinShortcut(_ sender: Any?) { controller?.togglePin() }
     @objc func clearHistory(_ sender: Any?) { controller?.promptClearHistory() }
     @objc func importData(_ sender: Any?) { controller?.importData() }
@@ -1385,6 +1478,9 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) throws {
 func selfTest(_ directory: URL) throws {
     let store = try Store(directory: directory)
     try check(store.document.active.count == 1 && store.document.history.isEmpty, "clean startup")
+    try check(matchesSearch("中文与 English 测试", query: "english 中文"), "search matches multiple terms across languages")
+    try check(matchesSearch("Résumé planning", query: "resume"), "search ignores case and diacritics")
+    try check(!matchesSearch("second item", query: "missing"), "search excludes non-matches")
 
     let first = store.document.active[0].id
     store.document.active[0].text = "中文与 English 测试"
@@ -1455,6 +1551,11 @@ func selfTest(_ directory: URL) throws {
 
     let controller = Controller(store: store)
     controller.window.makeKeyAndOrderFront(nil)
+    controller.search.stringValue = "第二条"
+    controller.refreshVisibleIndexes()
+    try check(controller.numberOfRows(in: controller.table) == 1 && controller.activeIndex(forDisplayRow: 0) == 1, "search filters active rows without changing data")
+    controller.clearSearch()
+    try check(store.document.active.count == 2, "clearing search preserves active rows")
 
     let blank = store.add(after: nil)
     controller.toggleComplete(blank)
@@ -1575,7 +1676,7 @@ func selfTest(_ directory: URL) throws {
     let files = try FileManager.default.contentsOfDirectory(atPath: directory.path)
     try check(files.contains(where: { $0.hasPrefix("tasks.damaged-") }), "damaged original preserved")
 
-    try Data("PASS: native launch, add, delayed check-off, undo complete, history, restore, clear history, delete item, reminder, link, copy, import, pin, opacity, fold, image, persistence, scale, validation, backup recovery\n".utf8).write(to: directory.appendingPathComponent("result.txt"))
+    try Data("PASS: native launch, add, search, delayed check-off, undo complete, history, restore, clear history, delete item, reminder, link, copy, import, pin, opacity, fold, image, persistence, scale, validation, backup recovery\n".utf8).write(to: directory.appendingPathComponent("result.txt"))
     print("PASS: native app smoke and data tests")
 }
 
@@ -1631,6 +1732,8 @@ for (name, selector, key) in [
     let item = editMenu.addItem(withTitle: name, action: selector, keyEquivalent: key)
     if name == "重做" { item.keyEquivalentModifierMask = [.command, .shift] }
 }
+editMenu.addItem(.separator())
+editMenu.addItem(withTitle: "查找…", action: #selector(AppDelegate.focusSearch(_:)), keyEquivalent: "f")
 editItem.submenu = editMenu
 mainMenu.addItem(editItem)
 
