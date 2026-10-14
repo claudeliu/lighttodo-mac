@@ -44,8 +44,8 @@ cat > out/LightTodo.app/Contents/Info.plist <<'PLIST'
 <key>CFBundleName</key><string>LightTodo</string>
 <key>CFBundleDisplayName</key><string>轻量待办</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.3.1</string>
-<key>CFBundleVersion</key><string>4</string>
+<key>CFBundleShortVersionString</key><string>0.4.0</string>
+<key>CFBundleVersion</key><string>5</string>
 <key>CFBundleIconFile</key><string>LightTodo.icns</string>
 <key>LSMinimumSystemVersion</key><string>12.0</string>
 <key>NSHighResolutionCapable</key><true/>

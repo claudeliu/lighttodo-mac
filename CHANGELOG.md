@@ -2,7 +2,13 @@
 
 ## Unreleased
 
+- No unreleased changes.
+
+## 0.4.0
+
 - Added confirmed JSON data import with validation, automatic pre-import backup, and safe handling of background images that are unavailable on the destination Mac.
+- Added instant multi-term search for active items and completion history, with case- and diacritic-insensitive matching plus a standard Command-F shortcut.
+- Kept search view-only: filtering never changes or removes saved items.
 
 ## 0.3.1
 
